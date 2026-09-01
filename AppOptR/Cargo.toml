@@ -1,0 +1,20 @@
+[package]
+name = "AppOpt"
+version = "2.2.5"
+edition = "2024"
+
+[[bin]]
+name = "AppOpt"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+aya = "0.14"
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
