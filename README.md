@@ -1,7 +1,7 @@
 # AppOptR
 
 #### 介绍
-Android 应用 CPU 亲和性管理工具 - https://gitee.com/sutoliu/AppOpt 的Rust重构版
+Android 应用 CPU 亲和性管理工具
 
  **使用说明请参考** 
 
