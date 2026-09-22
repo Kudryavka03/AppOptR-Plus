@@ -20,7 +20,9 @@ use crate::cpuset::{
     CpuSet, CpuTopology, DEFAULT_CPUSET_NAME, base_cpuset, create_cpuset_dir, parse_cpu_spec,
 };
 use crate::ebpf_mode::ebpf_probe;
-use crate::rule_edit::{RuleEdit, rule_delete, rule_delete_pkg, rule_rename, rule_upsert};
+use crate::rule_edit::{
+    RuleEdit, rule_clone, rule_clone_check, rule_delete, rule_delete_pkg, rule_rename, rule_upsert,
+};
 use crate::tuning::{self};
 use crate::{EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
@@ -31,6 +33,9 @@ pub static MODE_FORCE: AtomicU8 = AtomicU8::new(0);
 pub static WEB_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub static WEB_STATS: Mutex<Option<WebStats>> = Mutex::new(None);
+/// Serialize web mutations that span the legacy CPU file and structured
+/// tuning JSON, preventing concurrent browser requests from interleaving.
+static WEB_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone)]
 pub struct WebStats {
@@ -230,6 +235,7 @@ fn dispatch(out: &mut TcpStream, req: &Request) {
         ("POST", "/api/rule") => rule_api(req),
         ("POST", "/api/rule/del") => rule_del_api(req),
         ("POST", "/api/rule/rename") => rule_rename_api(req),
+        ("POST", "/api/rule/clone") => rule_clone_api(req),
         ("POST", "/api/config") => config_set_api(req),
         ("POST", "/api/tuning") => tuning_set_api(req),
         ("POST", "/api/suggest") => suggest_api(req),
@@ -323,6 +329,7 @@ fn tuning_json() -> String {
 /// partially-updated App profile when a browser is interrupted between a
 /// memory-group edit and one of its thread-rule edits.
 fn tuning_set_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
     let Ok(value) = serde_json::from_slice::<Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };
@@ -375,6 +382,7 @@ fn pkg_shape_ok(pkg: &str) -> bool {
 }
 
 fn rule_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };
@@ -414,6 +422,7 @@ fn rule_api(req: &Request) -> (u16, String) {
 }
 
 fn rule_del_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };
@@ -441,6 +450,7 @@ fn rule_del_api(req: &Request) -> (u16, String) {
 }
 
 fn rule_rename_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };
@@ -471,6 +481,83 @@ fn rule_rename_api(req: &Request) -> (u16, String) {
         RuleEdit::Malformed => err_json(409, "配置文件存在未闭合块，请修复后重试"),
         RuleEdit::IoErr => err_json(500, "配置文件写入失败"),
     }
+}
+
+/// Clone selected CPU and structured-tuning categories in one web request.
+/// Each backing file is atomically replaced by its own editor; validation of
+/// both sides happens before either file is written.
+fn rule_clone_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
+    let Ok(value) = serde_json::from_slice::<Value>(&req.body) else {
+        return err_json(400, "请求体不是合法 JSON");
+    };
+    let (Some(source), Some(target)) = (
+        value["source"].as_str().map(str::trim),
+        value["target"].as_str().map(str::trim),
+    ) else {
+        return err_json(400, "缺少 source 或 target 包名");
+    };
+    let copy_cpu_package = value["cpu_package"].as_bool().unwrap_or(false);
+    let copy_cpu_threads = value["cpu_threads"].as_bool().unwrap_or(false);
+    let copy_tuning_memory = value["tuning_memory"].as_bool().unwrap_or(false);
+    let copy_tuning_threads = value["tuning_threads"].as_bool().unwrap_or(false);
+    if !copy_cpu_package && !copy_cpu_threads && !copy_tuning_memory && !copy_tuning_threads {
+        return err_json(400, "请至少选择一类要克隆的规则");
+    }
+    if source == target {
+        return err_json(400, "源包名与目标包名不能相同");
+    }
+    if !token_ok(source, MAX_PKG_LEN) || !tuning::package_name_ok(target) {
+        return err_json(400, "包名含有非法字符");
+    }
+
+    let copy_cpu = copy_cpu_package || copy_cpu_threads;
+    let copy_tuning = copy_tuning_memory || copy_tuning_threads;
+    let file = lock_ignore_poison(&CONFIG_FILE).clone();
+    if copy_cpu {
+        match rule_clone_check(&file, source, target, copy_cpu_package, copy_cpu_threads) {
+            RuleEdit::Ok => {}
+            RuleEdit::NotFound => return err_json(404, "来源应用没有所选 CPU 规则"),
+            RuleEdit::Conflict => return err_json(409, "目标应用已有 CPU 规则，不能覆盖克隆"),
+            RuleEdit::Malformed => {
+                return err_json(409, "配置文件存在未闭合块，请修复后重试");
+            }
+            RuleEdit::IoErr => return err_json(500, "读取 CPU 规则文件失败"),
+        }
+    }
+    if copy_tuning
+        && let Err(error) =
+            tuning::clone_app_check(source, target, copy_tuning_memory, copy_tuning_threads)
+    {
+        let code = if error.contains("目标应用") {
+            409
+        } else {
+            404
+        };
+        return err_json(code, &error);
+    }
+
+    if copy_cpu {
+        match rule_clone(&file, source, target, copy_cpu_package, copy_cpu_threads) {
+            RuleEdit::Ok => {}
+            RuleEdit::Malformed => {
+                return err_json(409, "配置文件存在未闭合块，请修复后重试");
+            }
+            RuleEdit::Conflict => return err_json(409, "目标应用已有 CPU 规则，不能覆盖克隆"),
+            RuleEdit::NotFound => return err_json(404, "来源应用没有所选 CPU 规则"),
+            RuleEdit::IoErr => return err_json(500, "写入 CPU 规则文件失败"),
+        }
+    }
+    if copy_tuning
+        && let Err(error) =
+            tuning::clone_app(source, target, copy_tuning_memory, copy_tuning_threads)
+    {
+        eprintln!("克隆: 调优写入失败，CPU 部分可能已完成: {}", error);
+        return err_json(500, &format!("写入调优规则失败: {}", error));
+    }
+
+    config_reload_now();
+    (200, json!({ "ok": true }).to_string())
 }
 
 /// 输入建议
@@ -546,9 +633,24 @@ fn rank_top(counts: BTreeMap<String, usize>, lq: &str) -> Vec<(String, usize)> {
 fn suggest_pkgs(q: &str) -> Vec<(String, usize)> {
     let mut counts: BTreeMap<String, usize> =
         installed_pkgs().into_iter().map(|p| (p, 0)).collect();
+    // Put configured packages first so the add dialogs can reuse an existing
+    // CPU-rule or tuning-rule package even when it is not installed/running.
+    // AppConfig already combines both configuration sources.
+    const CONFIGURED_PRIORITY: usize = 1_000_000;
+    if let Some(cfg) = current_cfg() {
+        for pkg in &cfg.pkgs {
+            counts.insert(pkg.clone(), CONFIGURED_PRIORITY);
+        }
+    }
+    // The structured snapshot is read separately as a fresh fallback while a
+    // config reload is in flight.
+    for pkg in tuning::app_package_names() {
+        counts.insert(pkg, CONFIGURED_PRIORITY);
+    }
     for_each_pid(|pid| {
         if let Some(name) = read_cmdline(pid).filter(|n| n.contains('.')) {
-            *counts.entry(name).or_insert(0) += 1;
+            let count = counts.entry(name).or_insert(0);
+            *count = count.saturating_add(1);
         }
     });
     rank_top(counts, &q.to_ascii_lowercase())
@@ -590,6 +692,7 @@ fn config_json() -> String {
 }
 
 fn config_set_api(req: &Request) -> (u16, String) {
+    let _mutation_guard = lock_ignore_poison(&WEB_MUTATION_LOCK);
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };

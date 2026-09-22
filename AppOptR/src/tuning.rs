@@ -565,6 +565,102 @@ pub fn replace_and_save(path: &str, config: TuningConfig) -> Result<(), String> 
     Ok(())
 }
 
+fn clone_app_config(
+    config: &TuningConfig,
+    source: &str,
+    target: &str,
+    copy_memory: bool,
+    copy_threads: bool,
+) -> Result<TuningConfig, String> {
+    if source == target {
+        return Err("源包名与目标包名不能相同".to_string());
+    }
+    let source_app = config
+        .apps
+        .iter()
+        .find(|app| app.pkg == source)
+        .ok_or_else(|| "来源应用没有调优规则".to_string())?;
+    let memory_group = if copy_memory {
+        Some(
+            source_app
+                .memory_group
+                .clone()
+                .ok_or_else(|| "来源应用没有内存组关联".to_string())?,
+        )
+    } else {
+        None
+    };
+    let threads = if copy_threads {
+        if source_app.threads.is_empty() {
+            return Err("来源应用没有线程调优规则".to_string());
+        }
+        source_app.threads.clone()
+    } else {
+        Vec::new()
+    };
+
+    let mut next = config.clone();
+    if let Some(target_app) = next.apps.iter_mut().find(|app| app.pkg == target) {
+        if copy_memory && target_app.memory_group.is_some() {
+            return Err("目标应用已有内存组关联".to_string());
+        }
+        if copy_threads && !target_app.threads.is_empty() {
+            return Err("目标应用已有线程调优规则".to_string());
+        }
+        if copy_memory {
+            target_app.memory_group = memory_group;
+        }
+        if copy_threads {
+            target_app.threads = threads;
+        }
+    } else {
+        next.apps.push(AppTuneRule {
+            pkg: target.to_string(),
+            memory_group,
+            threads,
+        });
+    }
+    Ok(next)
+}
+
+/// Validate selected tuning categories before a combined CPU/tuning clone
+/// begins. This prevents a CPU rule from being written when the structured
+/// portion would be rejected for a conflict.
+pub fn clone_app_check(
+    source: &str,
+    target: &str,
+    copy_memory: bool,
+    copy_threads: bool,
+) -> Result<(), String> {
+    clone_app_config(
+        &config_snapshot(),
+        source,
+        target,
+        copy_memory,
+        copy_threads,
+    )
+    .map(|_| ())
+}
+
+/// Copy only the selected tuning categories. Existing unselected categories on
+/// the target stay intact; selected categories must be absent to avoid a
+/// silent overwrite.
+pub fn clone_app(
+    source: &str,
+    target: &str,
+    copy_memory: bool,
+    copy_threads: bool,
+) -> Result<(), String> {
+    let _save_guard = TUNING_SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let next = {
+        let current = TUNING_CONFIG.read().unwrap_or_else(|e| e.into_inner());
+        clone_app_config(&current, source, target, copy_memory, copy_threads)?
+    };
+    write_config(&tuning_file(), &next)?;
+    replace_config(next);
+    Ok(())
+}
+
 fn cgroup_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for root in ["/dev/memcg", "/sys/fs/cgroup/memory", "/sys/fs/cgroup"] {
@@ -1065,5 +1161,64 @@ mod tests {
             }]
         });
         assert!(config_from_value(&value).is_err());
+    }
+
+    #[test]
+    fn clones_only_selected_tuning_categories() {
+        let config = TuningConfig {
+            memory_groups: vec![MemoryGroup {
+                name: "game".to_string(),
+                path: "mimd/uid_{uid}".to_string(),
+                ..Default::default()
+            }],
+            apps: vec![
+                AppTuneRule {
+                    pkg: "com.example.source".to_string(),
+                    memory_group: Some("game".to_string()),
+                    threads: vec![ThreadTuneRule {
+                        pattern: "RenderThread".to_string(),
+                        uclamp_min: Some(512),
+                        uclamp_max: Some(1024),
+                        nice: Some(-10),
+                    }],
+                },
+                AppTuneRule {
+                    pkg: "com.example.target".to_string(),
+                    memory_group: None,
+                    threads: vec![ThreadTuneRule {
+                        pattern: "Worker".to_string(),
+                        uclamp_min: None,
+                        uclamp_max: None,
+                        nice: Some(-5),
+                    }],
+                },
+            ],
+        };
+        let next = clone_app_config(
+            &config,
+            "com.example.source",
+            "com.example.target",
+            true,
+            false,
+        )
+        .unwrap();
+        let target = next
+            .apps
+            .iter()
+            .find(|app| app.pkg == "com.example.target")
+            .unwrap();
+        assert_eq!(target.memory_group.as_deref(), Some("game"));
+        assert_eq!(target.threads.len(), 1);
+        assert_eq!(target.threads[0].pattern, "Worker");
+        assert!(
+            clone_app_config(
+                &next,
+                "com.example.source",
+                "com.example.target",
+                false,
+                true
+            )
+            .is_err()
+        );
     }
 }

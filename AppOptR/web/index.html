@@ -66,10 +66,12 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 .rule-add{display:flex;align-items:center;justify-content:center;gap:4px;margin:10px 14px;padding:9px 0;border:1px dashed var(--border);border-radius:10px;color:var(--sub);font-size:13px;width:calc(100% - 28px)}
 .rule-add:active{opacity:.5}
 .rule-add svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
-.icon-btn{padding:6px;border-radius:8px;color:var(--sub);display:flex;transition:transform .12s,background .12s}
-.icon-btn.danger{color:var(--red)}
-.icon-btn:active{transform:scale(.85);background:rgba(0,0,0,.06)}
-.icon-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .icon-btn{padding:6px;border-radius:8px;color:var(--sub);display:flex;transition:transform .12s,background .12s}
+  .icon-btn.danger{color:var(--red)}
+  .icon-btn:active{transform:scale(.85);background:rgba(0,0,0,.06)}
+  .icon-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .clone-btn{color:var(--blue);border:1px solid rgba(0,122,255,.22);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;line-height:1;transition:transform .12s,background .12s}
+  .clone-btn:active{transform:scale(.9);background:rgba(0,122,255,.08)}
 .empty{padding:48px 20px;text-align:center;color:var(--sub);font-size:13px;line-height:1.8}
 .seg{display:flex;background:rgba(118,118,128,.12);border-radius:10px;padding:2px;gap:2px}
 .seg button{flex:1;padding:7px 0;border-radius:8px;font-size:13px;transition:all .15s}
@@ -136,7 +138,12 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
   .tune-thread .tr-head input{margin:0}
   .check-row{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px}
   .check-row input{width:auto!important;margin:0!important}
-.btn-wx{background:#07c160}
+  .clone-source{background:var(--bg);border-radius:10px;padding:9px 12px;font-family:var(--mono);font-size:13px;word-break:break-all}
+  .clone-options{margin:12px 0 4px}
+  .clone-option{border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:7px 0}
+  .clone-option.disabled{opacity:.45}
+  .clone-option small{color:var(--sub);margin-left:auto;text-align:right}
+  .btn-wx{background:#07c160}
 #page-donate .logo{background:linear-gradient(135deg,#ff9a9e,#ff5e7e)}
 #page-donate .logo svg{fill:#fff;stroke:none}
 </style>
@@ -309,7 +316,7 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 <div id="modal-rule" class="modal-bg" hidden>
 <div class="modal">
 <h3 id="mr-title">添加应用</h3>
-<div class="sg-wrap"><input id="mr-pkg" placeholder="输入应用包名"><div class="sg-box" id="sg-pkg" hidden></div></div>
+<div class="sg-wrap"><input id="mr-pkg" placeholder="输入或选择已有包名"><div class="sg-box" id="sg-pkg" hidden></div></div>
 <div id="mr-rows"></div>
 <button class="rule-add" id="mr-addrow" hidden>＋ 线程规则</button>
 <div class="modal-actions">
@@ -346,7 +353,7 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 <div id="modal-tuning-app" class="modal-bg" hidden>
 <div class="modal">
 <h3 id="ma-title">添加应用调优</h3>
-<div class="sg-wrap"><input id="ma-pkg" placeholder="输入应用包名"><div class="sg-box" id="sg-ma-pkg" hidden></div></div>
+<div class="sg-wrap"><input id="ma-pkg" placeholder="输入或选择已有包名"><div class="sg-box" id="sg-ma-pkg" hidden></div></div>
 <label class="tune-label">内存组（可选）</label>
 <select id="ma-group"></select>
 <div id="ma-threads"></div>
@@ -354,6 +361,27 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 <div class="modal-actions">
 <button class="btn-outline" id="ma-cancel">取消</button>
 <button class="btn" id="ma-save">保存</button>
+</div>
+</div>
+</div>
+
+<div id="modal-clone" class="modal-bg" hidden>
+<div class="modal">
+<h3>克隆规则</h3>
+<label class="tune-label">来源应用</label>
+<div id="cl-source" class="clone-source">-</div>
+<label class="tune-label">新包名</label>
+<div class="sg-wrap"><input id="cl-target" placeholder="输入新的应用包名"><div class="sg-box" id="sg-cl-target" hidden></div></div>
+<div class="clone-options">
+<label class="check-row clone-option" id="cl-cpu-package-row"><input id="cl-cpu-package" type="checkbox"><span>CPU 包级规则</span><small id="cl-cpu-package-note"></small></label>
+<label class="check-row clone-option" id="cl-cpu-threads-row"><input id="cl-cpu-threads" type="checkbox"><span>CPU 线程规则</span><small id="cl-cpu-threads-note"></small></label>
+<label class="check-row clone-option" id="cl-tuning-memory-row"><input id="cl-tuning-memory" type="checkbox"><span>内存组关联</span><small id="cl-tuning-memory-note"></small></label>
+<label class="check-row clone-option" id="cl-tuning-threads-row"><input id="cl-tuning-threads" type="checkbox"><span>线程 UCLAMP / nice</span><small id="cl-tuning-threads-note"></small></label>
+</div>
+<div class="hint" id="cl-hint">只复制内存组关联，不会复制或创建内存组本身。目标包名已有同类规则时会拒绝克隆。</div>
+<div class="modal-actions">
+<button class="btn-outline" id="cl-cancel">取消</button>
+<button class="btn" id="cl-save">克隆</button>
 </div>
 </div>
 </div>
@@ -448,6 +476,7 @@ function grpInner(g,gi){
 <span class="grp-name">${esc(g.pkg)}</span>
 <span class="grp-count">${g.items.length}</span>
 <button class="icon-btn" data-editapp="${gi}" title="编辑应用">${ICO_EDIT}</button>
+<button class="clone-btn" data-clone-rule="${gi}" title="克隆规则">克隆</button>
 <button class="icon-btn danger" data-delpkg="${gi}" title="删除该应用全部规则">${ICO_TRASH}</button>
 </div>
 <div class="grp-body"><div class="grp-inner">
@@ -489,6 +518,8 @@ $('r-filter').addEventListener('input',renderRules);
 $('r-list').addEventListener('click',e=>{
   const ea=e.target.closest('[data-editapp]');
   if(ea){openRuleModal('edit-app',+ea.dataset.editapp);return}
+  const cr=e.target.closest('[data-clone-rule]');
+  if(cr){openClone(rulesData[+cr.dataset.cloneRule].pkg);return}
   const dp=e.target.closest('[data-delpkg]');
   if(dp){delPkg(+dp.dataset.delpkg);return}
   const at=e.target.closest('[data-addthread]');
@@ -671,7 +702,7 @@ function suggest_bind(input, box, opts = {}) {
     const q = input.value.trim();
     const pkgInput = opts.pkgInput || (opts.thread ? 'mr-pkg' : '');
     const pkg = pkgInput ? $(pkgInput).value.trim() : '';
-    if (!q || (pkgInput && !pkg)) { hide(); return; }
+    if ((!q && !opts.showOnFocus) || (pkgInput && !pkg)) { hide(); return; }
     const cur = ++seq;
     box.dataset.closed = '';
     const body = pkgInput ? { pkg, q } : { q };
@@ -682,6 +713,11 @@ function suggest_bind(input, box, opts = {}) {
     } catch (e) {}
   };
   input.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(fetch_list, 250); });
+  input.addEventListener('focus', () => {
+    if (!opts.showOnFocus) return;
+    clearTimeout(tm);
+    fetch_list();
+  });
   const pick = v => { input.value = v; opts.onpick?.(v); hide(); };
   input.addEventListener('keydown', e => {
     if (box.hidden || !items.length) return;
@@ -701,7 +737,7 @@ function suggest_bind(input, box, opts = {}) {
 }
 const sgClose = b => { b.hidden = true; b.dataset.closed = '1'; };
 const closeThreadSuggest = () => document.querySelectorAll('#mr-rows .sg-box:not([hidden])').forEach(sgClose);
-suggest_bind($('mr-pkg'), $('sg-pkg'), { onpick: closeThreadSuggest });
+suggest_bind($('mr-pkg'), $('sg-pkg'), { showOnFocus:true,onpick: closeThreadSuggest });
 $('mr-pkg').addEventListener('input', closeThreadSuggest);
 document.addEventListener('pointerdown', e => {
   if (!e.target.closest('.sg-wrap'))
@@ -734,7 +770,7 @@ function renderTuning(){
     '<div class="row"><div style="min-width:0"><div class="value" style="text-align:left">'+esc(g.name)+'</div><div class="hint" style="margin:2px 0 0">'+esc(g.path)+'<br>'+esc(memSummary(g))+'</div></div><button class="icon-btn" data-mg-edit="'+i+'" title="编辑内存组">'+ICO_EDIT+'</button><button class="icon-btn danger" data-mg-del="'+i+'" title="删除内存组">'+ICO_TRASH+'</button></div>'
   ).join(''):'<div class="empty">暂无内存组<br>先添加一个已有的 memory cgroup</div>';
   abox.innerHTML=apps.length?apps.map((a,i)=>
-    '<div class="row"><div style="min-width:0"><div class="value" style="text-align:left">'+esc(a.pkg)+'</div><div class="hint" style="margin:2px 0 0">'+esc(appSummary(a))+'</div></div><button class="icon-btn" data-ma-edit="'+i+'" title="编辑应用调优">'+ICO_EDIT+'</button><button class="icon-btn danger" data-ma-del="'+i+'" title="删除应用调优">'+ICO_TRASH+'</button></div>'
+    '<div class="row"><div style="min-width:0"><div class="value" style="text-align:left">'+esc(a.pkg)+'</div><div class="hint" style="margin:2px 0 0">'+esc(appSummary(a))+'</div></div><button class="icon-btn" data-ma-edit="'+i+'" title="编辑应用调优">'+ICO_EDIT+'</button><button class="clone-btn" data-clone-tuning="'+i+'" title="克隆规则">克隆</button><button class="icon-btn danger" data-ma-del="'+i+'" title="删除应用调优">'+ICO_TRASH+'</button></div>'
   ).join(''):'<div class="empty">暂无应用调优<br>可单独设置内存组或线程 UCLAMP / nice</div>';
   const c=tuningData.capabilities||{},roots=(c.memory_roots||[]).join('、');
   $('tg-caps').textContent=roots
@@ -852,6 +888,8 @@ $('tg-list').addEventListener('click',e=>{
 $('ta-list').addEventListener('click',e=>{
   const edit=e.target.closest('[data-ma-edit]'),del=e.target.closest('[data-ma-del]');
   if(edit)return openTuningApp(+edit.dataset.maEdit);
+  const clone=e.target.closest('[data-clone-tuning]');
+  if(clone)return openClone(tuningData.apps[+clone.dataset.cloneTuning].pkg);
   if(del){
     const i=+del.dataset.maDel,a=tuningData.apps[i];
     if(confirm('删除应用 '+a.pkg+' 的调优配置？')){tuningData.apps.splice(i,1);saveTuning().catch(x=>toast(x.message))}
@@ -869,7 +907,71 @@ $('ma-threads').addEventListener('click',e=>{
   const del=e.target.closest('.ma-delthread');if(!del)return;
   maThreads.splice(+del.closest('[data-mti]').dataset.mti,1);renderAppThreads();
 });
-suggest_bind($('ma-pkg'),$('sg-ma-pkg'),{});
+suggest_bind($('ma-pkg'),$('sg-ma-pkg'),{showOnFocus:true});
+
+let cloneSource='',cloneBusy=false;
+function setCloneOption(id,available,note){
+  const input=$(id),row=$(id+'-row'),label=$(id+'-note');
+  input.disabled=!available;
+  input.checked=available;
+  row.classList.toggle('disabled',!available);
+  label.textContent=note;
+}
+function cloneSelection(){
+  return {
+    cpu_package:$('cl-cpu-package').checked,
+    cpu_threads:$('cl-cpu-threads').checked,
+    tuning_memory:$('cl-tuning-memory').checked,
+    tuning_threads:$('cl-tuning-threads').checked
+  };
+}
+function refreshCloneAction(){
+  const target=$('cl-target').value.trim(),copy=cloneSelection();
+  const selected=Object.values(copy).some(Boolean);
+  $('cl-save').disabled=cloneBusy||!selected||!target||target===cloneSource;
+  if(!target)$('cl-hint').textContent='输入新的包名后即可克隆。只复制内存组关联，不会复制或创建内存组本身。';
+  else if(target===cloneSource)$('cl-hint').textContent='目标包名不能与来源应用相同。';
+  else $('cl-hint').textContent='目标包名已有同类规则时会拒绝克隆，避免覆盖现有配置。';
+}
+async function openClone(pkg){
+  const source=pkg;
+  cloneSource=source;
+  await Promise.all([loadRules(),loadTuning()]);
+  if(cloneSource!==source)return;
+  const cpu=rulesData.find(g=>g.pkg===source),tune=(tuningData.apps||[]).find(a=>a.pkg===source);
+  const hasCpuPackage=!!cpu&&(cpu.items||[]).some(item=>!item.thread);
+  const cpuThreads=cpu?(cpu.items||[]).filter(item=>item.thread).length:0;
+  const hasMemory=!!tune&&!!tune.memory_group;
+  const tuneThreads=tune?(tune.threads||[]).length:0;
+  $('cl-source').textContent=source;
+  $('cl-target').value='';
+  setCloneOption('cl-cpu-package',hasCpuPackage,hasCpuPackage?'来源已配置':'来源未配置');
+  setCloneOption('cl-cpu-threads',cpuThreads>0,cpuThreads?cpuThreads+' 条':'来源未配置');
+  setCloneOption('cl-tuning-memory',hasMemory,hasMemory?('内存组 '+tune.memory_group):'来源未配置');
+  setCloneOption('cl-tuning-threads',tuneThreads>0,tuneThreads?tuneThreads+' 条':'来源未配置');
+  refreshCloneAction();
+  $('modal-clone').hidden=false;
+}
+async function saveClone(){
+  if(cloneBusy)return;
+  const target=$('cl-target').value.trim(),copy=cloneSelection();
+  if(!target)return toast('请输入新的应用包名');
+  if(target===cloneSource)return toast('目标包名不能与来源应用相同');
+  if(!Object.values(copy).some(Boolean))return toast('请至少选择一类要克隆的规则');
+  cloneBusy=true;refreshCloneAction();
+  try{
+    await api('/api/rule/clone',{source:cloneSource,target:target,...copy});
+    $('modal-clone').hidden=true;
+    toast('规则已克隆到 '+target);
+    await Promise.all([loadRules(),loadTuning()]);
+  }catch(e){toast(e.message)}
+  finally{cloneBusy=false;refreshCloneAction()}
+}
+$('cl-cancel').onclick=()=>$('modal-clone').hidden=true;
+$('cl-save').onclick=saveClone;
+$('cl-target').addEventListener('input',refreshCloneAction);
+['cl-cpu-package','cl-cpu-threads','cl-tuning-memory','cl-tuning-threads'].forEach(id=>$(id).addEventListener('change',refreshCloneAction));
+suggest_bind($('cl-target'),$('sg-cl-target'),{});
 
 let confirmCb=null;
 function confirmDel(msg,body){

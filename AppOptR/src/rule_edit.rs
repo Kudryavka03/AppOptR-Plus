@@ -307,6 +307,147 @@ fn file_write(path: &str, lines: &[String]) -> RuleEdit {
     }
 }
 
+struct CloneRules {
+    package_cpus: Option<String>,
+    threads: Vec<(String, String)>,
+}
+
+fn clone_package_spec(lines: &[String], target: &Target) -> Option<String> {
+    let idx = match target.pkg_line {
+        Some(PkgLine::Standalone(idx) | PkgLine::OpenInline(idx)) => idx,
+        _ => return None,
+    };
+    match parse_outer(lines[idx].trim()) {
+        OuterLine::Rule { cpus, .. } => Some(cpus.to_string()),
+        _ => None,
+    }
+}
+
+fn clone_thread_spec(lines: &[String], loc: &ThreadLoc) -> Option<String> {
+    let line = lines.get(loc.idx)?.trim();
+    if loc.single {
+        let raw = strip_comment(line);
+        let body = raw.strip_suffix('{').map(str::trim_end).unwrap_or(raw);
+        split_single_line(body).map(|(_, _, cpus)| cpus.to_string())
+    } else {
+        split_rule_line(line).map(|(_, cpus, _)| cpus.to_string())
+    }
+}
+
+fn clone_prepare(
+    lines: &mut Vec<String>,
+    source: &str,
+    target: &str,
+    copy_package: bool,
+    copy_threads: bool,
+) -> Result<CloneRules, RuleEdit> {
+    normalize_singles(lines, source);
+    normalize_singles(lines, target);
+    let source_rules = target_scan(lines, source);
+    let target_rules = target_scan(lines, target);
+    if source_rules.unterminated || target_rules.unterminated {
+        return Err(RuleEdit::Malformed);
+    }
+    if target_rules.any_line() {
+        return Err(RuleEdit::Conflict);
+    }
+
+    let package_cpus = clone_package_spec(lines, &source_rules);
+    if copy_package && package_cpus.is_none() {
+        return Err(RuleEdit::NotFound);
+    }
+
+    let mut thread_entries: Vec<(usize, String, String)> = source_rules
+        .threads
+        .iter()
+        .flat_map(|(thread, locs)| {
+            locs.iter().filter_map(|loc| {
+                clone_thread_spec(lines, loc).map(|cpus| (loc.idx, thread.clone(), cpus))
+            })
+        })
+        .collect();
+    thread_entries.sort_unstable_by_key(|(idx, _, _)| *idx);
+    if copy_threads && thread_entries.is_empty() {
+        return Err(RuleEdit::NotFound);
+    }
+
+    Ok(CloneRules {
+        package_cpus: copy_package.then_some(package_cpus).flatten(),
+        threads: if copy_threads {
+            thread_entries
+                .into_iter()
+                .map(|(_, thread, cpus)| (thread, cpus))
+                .collect()
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+fn clone_append(lines: &mut Vec<String>, target: &str, rules: CloneRules) {
+    if !lines.is_empty() && !lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.push(String::new());
+    }
+    if rules.threads.is_empty() {
+        if let Some(cpus) = rules.package_cpus {
+            lines.push(format!("{}={}", target, cpus));
+        }
+        return;
+    }
+
+    if let Some(cpus) = rules.package_cpus {
+        lines.push(format!("{}={} {{", target, cpus));
+    } else {
+        lines.push(bare_open_line(target));
+    }
+    for (thread, cpus) in rules.threads {
+        lines.push(format!("\t{}={}", thread, cpus));
+    }
+    lines.push("}".to_string());
+}
+
+pub fn rule_clone_check(
+    path: &str,
+    source: &str,
+    target: &str,
+    copy_package: bool,
+    copy_threads: bool,
+) -> RuleEdit {
+    let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+    let mut lines: Vec<String> = fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
+    match clone_prepare(&mut lines, source, target, copy_package, copy_threads) {
+        Ok(_) => RuleEdit::Ok,
+        Err(error) => error,
+    }
+}
+
+/// Clone selected CPU-affinity categories into a package that has no existing
+/// CPU rule. The cloned form is normalized into a single package block.
+pub fn rule_clone(
+    path: &str,
+    source: &str,
+    target: &str,
+    copy_package: bool,
+    copy_threads: bool,
+) -> RuleEdit {
+    let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
+    let mut lines: Vec<String> = fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
+    let rules = match clone_prepare(&mut lines, source, target, copy_package, copy_threads) {
+        Ok(rules) => rules,
+        Err(error) => return error,
+    };
+    clone_append(&mut lines, target, rules);
+    file_write(path, &lines)
+}
+
 pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit {
     let _guard = crate::lock_ignore_poison(&WRITE_LOCK);
     let mut lines: Vec<String> = fs::read_to_string(path)
@@ -494,4 +635,52 @@ pub fn rule_rename(path: &str, old: &str, new: &str) -> RuleEdit {
         }
     }
     file_write(path, &lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clones_selected_cpu_categories_into_one_normalized_block() {
+        let path = std::env::temp_dir().join(format!(
+            "appoptr-rule-clone-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &path,
+            "com.example.source=0-3\ncom.example.source {\n\tRenderThread=4-5\n\tWorker=0-1\n}\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            rule_clone(
+                path.to_str().unwrap(),
+                "com.example.source",
+                "com.example.target",
+                true,
+                true
+            ),
+            RuleEdit::Ok
+        ));
+        let cloned = fs::read_to_string(&path).unwrap();
+        assert!(cloned.contains("com.example.target=0-3 {"));
+        assert!(cloned.contains("\tRenderThread=4-5"));
+        assert!(cloned.contains("\tWorker=0-1"));
+        assert!(matches!(
+            rule_clone_check(
+                path.to_str().unwrap(),
+                "com.example.source",
+                "com.example.target",
+                true,
+                false
+            ),
+            RuleEdit::Conflict
+        ));
+        let _ = fs::remove_file(path);
+    }
 }
