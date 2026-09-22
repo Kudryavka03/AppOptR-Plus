@@ -3,23 +3,26 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::apply_affinity::{read_cmdline, task_tids};
 use crate::cache::ProcCache;
 use crate::config::{
-    config_reload_now, spec_like,
-    CHECK_INTERVAL, CONFIG_FILE, CURRENT_CONFIG, FORCE_RELOAD, PARSE_FAILS,
+    CHECK_INTERVAL, CONFIG_FILE, CURRENT_CONFIG, FORCE_RELOAD, PARSE_FAILS, config_reload_now,
+    spec_like,
 };
-use crate::cpuset::{base_cpuset, create_cpuset_dir, parse_cpu_spec, CpuSet, CpuTopology, DEFAULT_CPUSET_NAME};
+use crate::cpuset::{
+    CpuSet, CpuTopology, DEFAULT_CPUSET_NAME, base_cpuset, create_cpuset_dir, parse_cpu_spec,
+};
 use crate::ebpf_mode::ebpf_probe;
-use crate::rule_edit::{rule_delete, rule_delete_pkg, rule_rename, rule_upsert, RuleEdit};
-use crate::{lock_ignore_poison, EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN};
+use crate::rule_edit::{RuleEdit, rule_delete, rule_delete_pkg, rule_rename, rule_upsert};
+use crate::tuning::{self};
+use crate::{EBPF_GAVE_UP, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
 pub const WEB_PORT: u16 = 8889;
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -116,11 +119,18 @@ fn request_read(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     let path = parts.next()?.split('?').next().unwrap_or("").to_string();
     let version = parts.next().unwrap_or("HTTP/1.1").to_string();
 
-    let (mut host, mut origin, mut site, mut ctype, mut len) =
-        (String::new(), String::new(), String::new(), String::new(), 0usize);
+    let (mut host, mut origin, mut site, mut ctype, mut len) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        0usize,
+    );
     let mut conn = String::new();
     for h in lines {
-        let Some((k, v)) = h.split_once(':') else { continue };
+        let Some((k, v)) = h.split_once(':') else {
+            continue;
+        };
         let v = v.trim();
         match k.trim().to_ascii_lowercase().as_str() {
             "host" => host = v.to_ascii_lowercase(),
@@ -181,19 +191,34 @@ fn resp_send(out: &mut TcpStream, status: u16, ctype: &str, body: &[u8], close: 
 
 fn dispatch(out: &mut TcpStream, req: &Request) {
     let port_str = format!(":{}", WEB_PORT);
-    let host = req.host.strip_suffix(&port_str).unwrap_or(req.host.as_str());
+    let host = req
+        .host
+        .strip_suffix(&port_str)
+        .unwrap_or(req.host.as_str());
     let origin_ok = matches!(host, "127.0.0.1" | "localhost")
         && (req.origin.is_empty()
             || req.origin == "null"
             || matches!(req.fetch_site.as_str(), "" | "none" | "same-origin"))
         && (req.method != "POST" || req.content_type.starts_with("application/json"));
     if !origin_ok {
-        resp_send(out, 403, "application/json", b"{\"ok\":false,\"err\":\"forbidden\"}", true);
+        resp_send(
+            out,
+            403,
+            "application/json",
+            b"{\"ok\":false,\"err\":\"forbidden\"}",
+            true,
+        );
         return;
     }
 
     if req.method == "GET" && matches!(req.path.as_str(), "/" | "/index.html") {
-        resp_send(out, 200, "text/html; charset=utf-8", INDEX_HTML.as_bytes(), !req.keep_alive);
+        resp_send(
+            out,
+            200,
+            "text/html; charset=utf-8",
+            INDEX_HTML.as_bytes(),
+            !req.keep_alive,
+        );
         return;
     }
 
@@ -201,14 +226,22 @@ fn dispatch(out: &mut TcpStream, req: &Request) {
         ("GET", "/api/status") => (200, status_json()),
         ("GET", "/api/rules") => (200, rules_json()),
         ("GET", "/api/config") => (200, config_json()),
+        ("GET", "/api/tuning") => (200, tuning_json()),
         ("POST", "/api/rule") => rule_api(req),
         ("POST", "/api/rule/del") => rule_del_api(req),
         ("POST", "/api/rule/rename") => rule_rename_api(req),
         ("POST", "/api/config") => config_set_api(req),
+        ("POST", "/api/tuning") => tuning_set_api(req),
         ("POST", "/api/suggest") => suggest_api(req),
         _ => err_json(404, "not found"),
     };
-    resp_send(out, status, "application/json", body.as_bytes(), !req.keep_alive);
+    resp_send(
+        out,
+        status,
+        "application/json",
+        body.as_bytes(),
+        !req.keep_alive,
+    );
 }
 
 fn err_json(code: u16, msg: &str) -> (u16, String) {
@@ -276,8 +309,36 @@ fn status_json() -> String {
         "all_core": topo.map(|t| t.present_str.clone()).unwrap_or_default(),
         "cores": topo.map(|t| t.present_cpus.count()).unwrap_or(0),
         "cpuset_enabled": topo.is_some_and(|t| t.cpuset_enabled),
+        "tuning_apps": tuning::app_count(),
+        "tuning_threads": tuning::thread_rule_count(),
     })
     .to_string()
+}
+
+fn tuning_json() -> String {
+    tuning::web_value().to_string()
+}
+
+/// Structured tuning is saved atomically as one document. This avoids a
+/// partially-updated App profile when a browser is interrupted between a
+/// memory-group edit and one of its thread-rule edits.
+fn tuning_set_api(req: &Request) -> (u16, String) {
+    let Ok(value) = serde_json::from_slice::<Value>(&req.body) else {
+        return err_json(400, "请求体不是合法 JSON");
+    };
+    let config = match tuning::config_from_value(&value) {
+        Ok(config) => config,
+        Err(error) => return err_json(400, &error),
+    };
+    match tuning::replace_and_save(&tuning::tuning_file(), config) {
+        Ok(()) => {
+            // AppConfig owns the package whitelist used by both discovery
+            // modes; force a reload even though applist.conf itself is intact.
+            config_reload_now();
+            (200, json!({ "ok": true }).to_string())
+        }
+        Err(error) => err_json(500, &error),
+    }
 }
 
 fn rules_json() -> String {
@@ -333,7 +394,9 @@ fn rule_api(req: &Request) -> (u16, String) {
     if thread.is_empty() && !pkg_shape_ok(pkg) {
         return err_json(400, "包名含 { 且以 } 结尾时不支持包级规则，可改用线程规则");
     }
-    if cpus.is_empty() || cpus.len() >= 64 || !spec_like(cpus)
+    if cpus.is_empty()
+        || cpus.len() >= 64
+        || !spec_like(cpus)
         || parse_cpu_spec(cpus, &cfg.topo).count() == 0
     {
         return err_json(400, "无效的 CPU 规格");
@@ -381,9 +444,10 @@ fn rule_rename_api(req: &Request) -> (u16, String) {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
         return err_json(400, "请求体不是合法 JSON");
     };
-    let (Some(old), Some(new)) =
-        (v["old"].as_str().map(str::trim), v["new"].as_str().map(str::trim))
-    else {
+    let (Some(old), Some(new)) = (
+        v["old"].as_str().map(str::trim),
+        v["new"].as_str().map(str::trim),
+    ) else {
         return err_json(400, "缺少 old 或 new 字段");
     };
     if !token_ok(old, MAX_PKG_LEN) || !token_ok(new, MAX_PKG_LEN) {
@@ -424,7 +488,10 @@ fn suggest_api(req: &Request) -> (u16, String) {
             if !token_ok(pkg, MAX_PKG_LEN) {
                 return err_json(400, "名称含有非法字符");
             }
-            suggest_threads(pkg, q).into_iter().map(|(n, _)| n).collect()
+            suggest_threads(pkg, q)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect()
         }
     };
     (200, json!({ "ok": true, "list": list }).to_string())
@@ -458,13 +525,22 @@ fn rank_top(counts: BTreeMap<String, usize>, lq: &str) -> Vec<(String, usize)> {
         .into_iter()
         .filter_map(|(n, c)| {
             let ln = n.to_ascii_lowercase();
-            let r = if ln.starts_with(lq) { 0 } else if ln.contains(lq) { 1 } else { 2 };
+            let r = if ln.starts_with(lq) {
+                0
+            } else if ln.contains(lq) {
+                1
+            } else {
+                2
+            };
             (r < 2).then_some((r, Reverse(c), n))
         })
         .collect();
     ranked.sort_unstable();
     ranked.truncate(20);
-    ranked.into_iter().map(|(_, Reverse(c), n)| (n, c)).collect()
+    ranked
+        .into_iter()
+        .map(|(_, Reverse(c), n)| (n, c))
+        .collect()
 }
 
 fn suggest_pkgs(q: &str) -> Vec<(String, usize)> {
@@ -548,9 +624,10 @@ fn config_set_api(req: &Request) -> (u16, String) {
     if let Some(n) = name {
         crate::cpuset::set_base_cpuset(n);
         if let Some(cfg) = current_cfg()
-            && cfg.topo.cpuset_enabled {
-                create_cpuset_dir(&base_cpuset(), &cfg.topo.present_str, &cfg.topo.mems_str);
-            }
+            && cfg.topo.cpuset_enabled
+        {
+            create_cpuset_dir(&base_cpuset(), &cfg.topo.present_str, &cfg.topo.mems_str);
+        }
         FORCE_RELOAD.store(true, Ordering::Release);
     }
     if let Some(p) = path {
@@ -565,7 +642,9 @@ fn config_set_api(req: &Request) -> (u16, String) {
     (200, json!({ "ok": true }).to_string())
 }
 
-pub const SETTINGS_FILE: &str = "./AppOpt.json";
+pub fn settings_file() -> String {
+    tuning::state_file("AppOpt.json")
+}
 
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -585,7 +664,7 @@ impl Default for Settings {
             mode: 0,
             check_interval: 2,
             cpuset_name: DEFAULT_CPUSET_NAME.to_string(),
-            config_file: "./applist.conf".to_string(),
+            config_file: tuning::state_file("applist.conf"),
         }
     }
 }
@@ -674,8 +753,12 @@ pub fn settings_save() {
         web_enable: WEB_ENABLED.load(Ordering::Relaxed),
         mode: MODE_FORCE.load(Ordering::Relaxed),
         check_interval: CHECK_INTERVAL.load(Ordering::Relaxed).max(1),
-        cpuset_name: base_cpuset().rsplit('/').next().unwrap_or_default().to_string(),
+        cpuset_name: base_cpuset()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
         config_file: lock_ignore_poison(&CONFIG_FILE).clone(),
     }
-    .save(SETTINGS_FILE);
+    .save(&settings_file());
 }

@@ -2,9 +2,9 @@ use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::FileExt;
 
-use crate::{MAX_PKG_LEN, MAX_THREAD_LEN};
 use crate::config::AppConfig;
-use crate::cpuset::{base_cpuset, CpuSet, CpuTopology};
+use crate::cpuset::{CpuSet, CpuTopology, base_cpuset};
+use crate::{MAX_PKG_LEN, MAX_THREAD_LEN};
 
 /// 栈上构建 /proc/{pid}/{suffix} 路径读取文件
 fn read_proc_file<'a>(pid: i32, suffix: &str, buf: &'a mut [u8]) -> Option<&'a [u8]> {
@@ -58,17 +58,10 @@ pub(crate) fn task_tids(pid: i32) -> Option<Vec<i32>> {
 }
 
 /// 对单线程应用亲和性，返回 true 表示 ESRCH 线程已退出
-pub fn affinity_set(
-    tid: i32,
-    cpus: &CpuSet,
-    cpuset_dir: &str,
-    topo: &CpuTopology,
-) -> bool {
-    // sched_getaffinity 短路，已符合目标零开销返回
-    if let Some(curr) = CpuSet::get_affinity(tid)
-        && curr == *cpus {
-            return false;
-        }
+pub fn affinity_set(tid: i32, cpus: &CpuSet, cpuset_dir: &str, topo: &CpuTopology) -> bool {
+    // Keep cpuset migration separate from sched affinity. A thread can already
+    // have the requested CPU mask while still residing in the wrong cpuset.
+    let affinity_matches = CpuSet::get_affinity(tid).is_some_and(|curr| curr == *cpus);
     if topo.cpuset_enabled {
         let tasks_path = if cpuset_dir.is_empty() {
             format!("{}/tasks", base_cpuset())
@@ -79,6 +72,9 @@ pub fn affinity_set(
             .append(true)
             .open(&tasks_path)
             .and_then(|mut f| writeln!(f, "{}", tid));
+    }
+    if affinity_matches {
+        return false;
     }
     if let Err(e) = cpus.set_affinity(tid) {
         return e.raw_os_error() == Some(libc::ESRCH);
@@ -93,15 +89,25 @@ pub(crate) fn proc_walk(
     filter: impl Fn(i32) -> bool,
     mut f: impl FnMut(i32, &str, bool),
 ) -> (usize, i32) {
-    let Some(entries) = fs::read_dir("/proc").ok() else { return (0, 0) };
+    let Some(entries) = fs::read_dir("/proc").ok() else {
+        return (0, 0);
+    };
     let mut count = 0;
     let mut total: i32 = 0;
     for entry in entries.flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else { continue };
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
         total += 1;
-        if !filter(pid) { continue; }
-        let Some(pkg) = read_cmdline(pid).or_else(|| tid_comm(pid)) else { continue };
-        if !cfg.pkgs.contains(&pkg) { continue; }
+        if !filter(pid) {
+            continue;
+        }
+        let Some(pkg) = read_cmdline(pid).or_else(|| tid_comm(pid)) else {
+            continue;
+        };
+        if !cfg.pkgs.contains(&pkg) {
+            continue;
+        }
         f(pid, &pkg, cfg.has_thread_rules.contains(&pkg));
         count += 1;
     }

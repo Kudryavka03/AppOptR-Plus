@@ -18,7 +18,10 @@ impl ProcScanState {
         Self {
             cache: ProcCache::new(),
             last_proc_count: 0,
-            scan_all_proc: false,
+            // Always discover the initial target set. Relying on a large
+            // enough sysinfo process-count delta misses devices with few
+            // startup processes.
+            scan_all_proc: true,
             tracked_pids: HashSet::new(),
             last_proc_total: 0,
             force_affinity: false,
@@ -52,10 +55,11 @@ pub fn cache_sync(state: &mut ProcScanState, cfg: &AppConfig) {
         need_reload = true;
     } else {
         let current_proc_count = info.procs as i32;
-        if current_proc_count > state.last_proc_count + 11 {
+        // A single new process can be the only process of a newly launched
+        // target app. The old "> 11" threshold missed such applications and
+        // therefore also delayed memory/UCLAMP tuning indefinitely.
+        if current_proc_count > state.last_proc_count {
             need_reload = true;
-        } else if current_proc_count > state.last_proc_count {
-            state.force_affinity = true;
         }
         state.last_proc_count = current_proc_count;
     }
@@ -90,7 +94,9 @@ fn proc_tasks(
     cfg: &AppConfig,
     cache: &mut ProcCache,
 ) -> bool {
-    let Some(tids) = task_tids(pid) else { return false };
+    let Some(tids) = task_tids(pid) else {
+        return false;
+    };
     let mut any_inserted = false;
     for tid in tids {
         let thread_name = if has_thread_rules {

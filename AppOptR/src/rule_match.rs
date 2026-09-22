@@ -3,7 +3,7 @@ use std::ffi::CString;
 use crate::MAX_THREAD_LEN;
 use crate::apply_affinity::read_cmdline;
 use crate::config::AppConfig;
-use crate::cpuset::{ensure_cpuset_dir, CpuSet};
+use crate::cpuset::{CpuSet, ensure_cpuset_dir};
 
 /// 线程亲和性计算结果
 pub struct AffinityResult {
@@ -13,11 +13,7 @@ pub struct AffinityResult {
 }
 
 /// 线程规则 CPU 累加，无线程匹配走包级 fallback，仍无则返回 None
-pub fn thread_affinity(
-    pkg: &str,
-    thread: &str,
-    cfg: &AppConfig,
-) -> Option<AffinityResult> {
+pub fn thread_affinity(pkg: &str, thread: &str, cfg: &AppConfig) -> Option<AffinityResult> {
     let mut cpus = CpuSet::new();
     let mut cpuset_dir = String::new();
     let mut matched = false;
@@ -79,7 +75,13 @@ fn fnmatch_c(pattern: &CString, string: &str) -> bool {
     }
     let mut buf = [0u8; MAX_THREAD_LEN];
     buf[..string.len()].copy_from_slice(string.as_bytes());
-    unsafe { libc::fnmatch(pattern.as_ptr(), buf.as_ptr() as *const _, libc::FNM_NOESCAPE) == 0 }
+    unsafe {
+        libc::fnmatch(
+            pattern.as_ptr(),
+            buf.as_ptr() as *const _,
+            libc::FNM_NOESCAPE,
+        ) == 0
+    }
 }
 
 /// 通过内核 comm 匹配配置包名

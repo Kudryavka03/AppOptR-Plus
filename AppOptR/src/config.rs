@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
-use crate::{lock_ignore_poison, CONFIG_UPDATED, MAX_PKG_LEN, MAX_THREAD_LEN};
-use crate::cpuset::{base_cpuset, create_cpuset_dir, parse_cpu_spec, CpuSet, CpuTopology};
+use crate::cpuset::{CpuSet, CpuTopology, base_cpuset, create_cpuset_dir, parse_cpu_spec};
+use crate::tuning;
+use crate::{CONFIG_UPDATED, MAX_PKG_LEN, MAX_THREAD_LEN, lock_ignore_poison};
 
 pub static INOTIFY_SUPPORTED: AtomicBool = AtomicBool::new(false);
 pub static INOTIFY_FD: AtomicI32 = AtomicI32::new(-1);
@@ -91,7 +92,10 @@ pub fn split_rule_line(p: &str) -> Option<(&str, &str, bool)> {
 
 pub fn close_like(p: &str) -> bool {
     p.strip_prefix('}').is_some_and(|r| {
-        r.is_empty() || r.starts_with(char::is_whitespace) || r.starts_with('#') || r.starts_with("//")
+        r.is_empty()
+            || r.starts_with(char::is_whitespace)
+            || r.starts_with('#')
+            || r.starts_with("//")
     })
 }
 
@@ -105,10 +109,23 @@ pub fn split_single_line(body: &str) -> Option<(&str, &str, &str)> {
 }
 
 pub enum OuterLine<'a> {
-    Rule { pkg: &'a str, cpus: &'a str, open: bool },
-    BareOpen { pkg: &'a str },
-    Pending { pkg: &'a str },
-    Single { pkg: &'a str, thread: &'a str, cpus: &'a str, open: bool },
+    Rule {
+        pkg: &'a str,
+        cpus: &'a str,
+        open: bool,
+    },
+    BareOpen {
+        pkg: &'a str,
+    },
+    Pending {
+        pkg: &'a str,
+    },
+    Single {
+        pkg: &'a str,
+        thread: &'a str,
+        cpus: &'a str,
+        open: bool,
+    },
     Junk,
 }
 
@@ -119,7 +136,12 @@ pub fn parse_outer(p: &str) -> OuterLine<'_> {
         None => (false, p),
     };
     if let Some((pkg, thread, cpus)) = split_single_line(body) {
-        return OuterLine::Single { pkg, thread, cpus, open };
+        return OuterLine::Single {
+            pkg,
+            thread,
+            cpus,
+            open,
+        };
     }
     if !open && close_like(body) {
         return OuterLine::Junk;
@@ -156,7 +178,11 @@ fn add_rule(
     if pkg.is_empty() || pkg.len() >= MAX_PKG_LEN || thread.len() >= MAX_THREAD_LEN {
         return false;
     }
-    if pkg.bytes().chain(thread.bytes()).any(|b| b < 0x20 || b == 0x7f) {
+    if pkg
+        .bytes()
+        .chain(thread.bytes())
+        .any(|b| b < 0x20 || b == 0x7f)
+    {
         return false;
     }
     if !spec_like(cpus_spec) {
@@ -170,7 +196,11 @@ fn add_rule(
         let dir_name = set.to_range_string();
         if topo.cpuset_enabled {
             let path = format!("{}/{}", base_cpuset(), dir_name);
-            if create_cpuset_dir(&path, &dir_name, &topo.mems_str) { dir_name } else { Default::default() }
+            if create_cpuset_dir(&path, &dir_name, &topo.mems_str) {
+                dir_name
+            } else {
+                Default::default()
+            }
         } else {
             String::new()
         }
@@ -247,7 +277,12 @@ pub fn load_config(
         }
 
         match parse_outer(p) {
-            OuterLine::Single { pkg, thread, cpus, open } => {
+            OuterLine::Single {
+                pkg,
+                thread,
+                cpus,
+                open,
+            } => {
                 if !pending_pkg.is_empty() {
                     fail_cnt += 1;
                 }
@@ -310,12 +345,16 @@ pub fn load_config(
     *last_mtime = mtime;
     PARSE_FAILS.store(fail_cnt, Ordering::Relaxed);
 
-    let pkgs: HashSet<String> = rules.iter().map(|r| r.pkg.clone()).collect();
-    let has_thread_rules: HashSet<String> = rules
+    let mut pkgs: HashSet<String> = rules.iter().map(|r| r.pkg.clone()).collect();
+    // Structured tuning profiles may exist without a legacy CPU-affinity
+    // rule. Include them in process discovery and the eBPF comm whitelist.
+    pkgs.extend(tuning::app_package_names());
+    let mut has_thread_rules: HashSet<String> = rules
         .iter()
         .filter(|r| !r.thread.is_empty())
         .map(|r| r.pkg.clone())
         .collect();
+    has_thread_rules.extend(tuning::thread_rule_packages());
     let num_rules = rules.len();
 
     println!("配置文件解析完成，共加载 {} 条规则", num_rules);
@@ -368,7 +407,9 @@ pub fn init_inotify(config_file: &str) {
         Ok(c) => c,
         Err(_) => {
             eprintln!("错误: 配置文件路径包含非法字符，使用轮询模式");
-            unsafe { libc::close(inotify_fd); }
+            unsafe {
+                libc::close(inotify_fd);
+            }
             return;
         }
     };

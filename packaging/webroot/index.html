@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AppOptR Plus</title>
+</head>
+<body>
+  <p>正在打开 AppOptR Plus 管理页…</p>
+  <p><a href="http://127.0.0.1:8889/">若未自动跳转，请点此打开管理页</a></p>
+  <script>
+    (async function () {
+      try {
+        if (window.ksu && typeof window.ksu.exec === "function") {
+          await window.ksu.exec("/data/adb/modules/appoptr-plus/service.sh");
+        }
+      } catch (_) {}
+      setTimeout(function () {
+        location.replace("http://127.0.0.1:8889/");
+      }, 1200);
+    }());
+  </script>
+</body>
+</html>

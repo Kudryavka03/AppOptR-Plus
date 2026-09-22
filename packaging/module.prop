@@ -1,0 +1,6 @@
+id=appoptr-plus
+name=AppOptR Plus
+version=2.3.0
+versionCode=20300
+author=Suto
+description=Per-app CPU, memory cgroup, UCLAMP and nice tuning for arm64 Android

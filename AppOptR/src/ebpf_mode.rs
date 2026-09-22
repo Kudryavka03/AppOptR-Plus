@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use aya::maps::{Array as AyaArray, HashMap as AyaHashMap};
-use aya::{programs::TracePoint as AyaTracePoint, Ebpf, EbpfLoader, Pod};
+use aya::{Ebpf, EbpfLoader, Pod, programs::TracePoint as AyaTracePoint};
 
 use crate::apply_affinity::{affinity_set, proc_walk, task_tids, tid_comm};
 use crate::cache::ProcCache;
@@ -67,7 +67,9 @@ impl Drop for EbpfState {
             let _ = handle.join();
         }
         if self.wakeup_fd >= 0 {
-            unsafe { libc::close(self.wakeup_fd); }
+            unsafe {
+                libc::close(self.wakeup_fd);
+            }
         }
     }
 }
@@ -205,16 +207,23 @@ fn tracepoint_parse(root: &str, category: &str, name: &str) -> Option<HashMap<St
         if parts.len() < 2 {
             continue;
         }
-        let field_name = parts[0].split_whitespace().last().unwrap_or("").split('[').next().unwrap_or("");
+        let field_name = parts[0]
+            .split_whitespace()
+            .last()
+            .unwrap_or("")
+            .split('[')
+            .next()
+            .unwrap_or("");
         if field_name.is_empty() {
             continue;
         }
         for part in &parts[1..] {
             if let Some(off_str) = part.strip_prefix("offset:")
-                && let Ok(off) = off_str.trim().parse::<u32>() {
-                    offsets.insert(field_name.to_string(), off);
-                    break;
-                }
+                && let Ok(off) = off_str.trim().parse::<u32>()
+            {
+                offsets.insert(field_name.to_string(), off);
+                break;
+            }
         }
     }
     Some(offsets)
@@ -444,19 +453,28 @@ fn applied_get(bpf: &mut Ebpf) -> Option<AyaHashMap<&mut aya::maps::MapData, u32
 }
 
 fn applied_set(bpf: &mut Ebpf, tid: i32, cpus: &CpuSet) {
-    let Some(mut applied) = applied_get(bpf) else { return };
+    let Some(mut applied) = applied_get(bpf) else {
+        return;
+    };
     if let Err(e) = applied.insert(tid as u32, cpus.bits[0], 0) {
-        eprintln!("eBPF: APPLIED_MAP 插入失败 tid={} ({})，map 可能已满", tid, e);
+        eprintln!(
+            "eBPF: APPLIED_MAP 插入失败 tid={} ({})，map 可能已满",
+            tid, e
+        );
     }
 }
 
 fn applied_del(bpf: &mut Ebpf, tid: i32) {
-    let Some(mut applied) = applied_get(bpf) else { return };
+    let Some(mut applied) = applied_get(bpf) else {
+        return;
+    };
     let _ = applied.remove(&(tid as u32));
 }
 
 fn applied_clear(bpf: &mut Ebpf) {
-    let Some(mut m) = applied_get(bpf) else { return };
+    let Some(mut m) = applied_get(bpf) else {
+        return;
+    };
     let keys: Vec<u32> = m.keys().filter_map(|r| r.ok()).collect();
     for k in &keys {
         let _ = m.remove(k);
@@ -490,11 +508,10 @@ pub fn event_dispatch(event: &EbpfProcEvent, cfg: &AppConfig, state: &mut EbpfSt
             applied_del(&mut state.bpf, tid);
         }
 
-        EBPF_EVENT_EXEC
-            if !event_apply(&mut state.cache, &mut state.bpf, tid, pid, comm, cfg) => {
-                state.cache.task_del(tid);
-                applied_del(&mut state.bpf, tid);
-            }
+        EBPF_EVENT_EXEC if !event_apply(&mut state.cache, &mut state.bpf, tid, pid, comm, cfg) => {
+            state.cache.task_del(tid);
+            applied_del(&mut state.bpf, tid);
+        }
 
         EBPF_EVENT_FORK => {
             // 子线程继承父线程亲和性与 cpuset
@@ -522,9 +539,16 @@ fn event_apply(
         return false;
     };
 
-    cache.task_apply(tid, pid, &pkg, comm, cfg, |t, c, d| {
+    let tracked = cache.task_apply(tid, pid, &pkg, comm, cfg, |t, c, d| {
         affinity_apply(t, c, d, cfg, bpf)
-    })
+    });
+    // APPLIED_MAP is also the kernel-side "managed task" marker. Pure memory
+    // or UCLAMP/nice profiles have no affinity callback, but must still be
+    // tracked so their child threads generate fork/rename events.
+    if tracked {
+        applied_set(bpf, tid, &cfg.topo.present_cpus);
+    }
+    tracked
 }
 
 /// 定期纠正 affinity_sync 清死亡 tid
@@ -540,17 +564,27 @@ pub fn full_scan(cfg: &AppConfig, state: &mut EbpfState) {
     state.cache.clear();
     applied_clear(&mut state.bpf);
 
-    proc_walk(cfg, |_| true, |pid, pkg, has_thread_rules| {
-        let Some(tids) = task_tids(pid) else { return };
-        for tid in tids {
-            let t_name = if has_thread_rules {
-                tid_comm(tid).unwrap_or_default()
-            } else {
-                String::new()
-            };
-            state.cache.task_apply(tid, pid, pkg, &t_name, cfg, |tid, cpus, cpuset_dir| {
-                affinity_apply(tid, cpus, cpuset_dir, cfg, &mut state.bpf)
-            });
-        }
-    });
+    proc_walk(
+        cfg,
+        |_| true,
+        |pid, pkg, has_thread_rules| {
+            let Some(tids) = task_tids(pid) else { return };
+            for tid in tids {
+                let t_name = if has_thread_rules {
+                    tid_comm(tid).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let tracked =
+                    state
+                        .cache
+                        .task_apply(tid, pid, pkg, &t_name, cfg, |tid, cpus, cpuset_dir| {
+                            affinity_apply(tid, cpus, cpuset_dir, cfg, &mut state.bpf)
+                        });
+                if tracked {
+                    applied_set(&mut state.bpf, tid, &cfg.topo.present_cpus);
+                }
+            }
+        },
+    );
 }

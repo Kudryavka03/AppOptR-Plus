@@ -1,0 +1,4 @@
+# Cargo build products for the two independent crates.
+/AppOptR/target/
+/appopt-ebpf/target/
+/out/

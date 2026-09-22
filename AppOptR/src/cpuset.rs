@@ -114,11 +114,7 @@ impl CpuSet {
                 &mut curr as *mut CpuSet as *mut libc::cpu_set_t,
             )
         };
-        if ret == -1 {
-            None
-        } else {
-            Some(curr)
-        }
+        if ret == -1 { None } else { Some(curr) }
     }
 
     pub fn set_affinity(&self, tid: i32) -> io::Result<()> {
@@ -167,11 +163,7 @@ pub fn parse_cpu_ranges(spec: &str, present: Option<&CpuSet>) -> CpuSet {
             if a == usize::MAX {
                 continue;
             }
-            if a > b {
-                (b, a)
-            } else {
-                (a, b)
-            }
+            if a > b { (b, a) } else { (a, b) }
         } else {
             let a: usize = part.parse().ok().unwrap_or(usize::MAX);
             if a == usize::MAX {
@@ -181,9 +173,10 @@ pub fn parse_cpu_ranges(spec: &str, present: Option<&CpuSet>) -> CpuSet {
         };
         for i in lo..=hi.min(CPU_SETSIZE - 1) {
             if let Some(present) = present
-                && !present.is_set(i) {
-                    continue;
-                }
+                && !present.is_set(i)
+            {
+                continue;
+            }
             set.set(i);
         }
     }
@@ -290,7 +283,11 @@ fn detect_core_types() -> (CpuSet, CpuSet, CpuSet) {
             }
             let cpus: Vec<usize> = fs::read_to_string(path.join("related_cpus"))
                 .ok()
-                .map(|s| s.split_whitespace().filter_map(|c| c.parse().ok()).collect())
+                .map(|s| {
+                    s.split_whitespace()
+                        .filter_map(|c| c.parse().ok())
+                        .collect()
+                })
                 .unwrap_or_default();
             if cpus.is_empty() {
                 continue;

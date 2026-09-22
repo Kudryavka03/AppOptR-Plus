@@ -10,26 +10,29 @@ mod ebpf_mode;
 mod proc_mode;
 mod rule_edit;
 mod rule_match;
+mod tuning;
 mod web;
 
 use std::env;
 use std::fs;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{config_loader, init_inotify, load_config, CHECK_INTERVAL, CONFIG_FILE, CURRENT_CONFIG};
+use crate::config::{
+    CHECK_INTERVAL, CONFIG_FILE, CURRENT_CONFIG, config_loader, init_inotify, load_config,
+};
 use crate::cpuset::{init_cpu_topo, set_base_cpuset};
 use crate::ebpf_mode::{
-    affinity_check, full_scan, event_dispatch, comm_map_init,
-    ebpf_init, EbpfState,
+    EbpfState, affinity_check, comm_map_init, ebpf_init, event_dispatch, full_scan,
 };
-use crate::proc_mode::{cache_sync, ProcScanState};
+use crate::proc_mode::{ProcScanState, cache_sync};
+use crate::tuning::{load_file as tuning_load_file, tuning_file};
 use crate::web::{
-    cache_stats, settings_load, settings_save, web_start, WebStats,
-    WEB_ENABLED, WEB_STATS, MODE_FORCE, SETTINGS_FILE,
+    MODE_FORCE, WEB_ENABLED, WEB_STATS, WebStats, cache_stats, settings_file, settings_load,
+    settings_save, web_start,
 };
 
 pub const MAX_PKG_LEN: usize = 128;
@@ -63,6 +66,7 @@ fn print_help(prog_name: &str) {
     println!();
     println!("应用设置保存于 ./AppOpt.json，首次运行自动创建；");
     println!("命令行参数优先于设置文件，web 端修改会写回该文件。");
+    println!("内存组与线程调优保存于 ./AppOpt.tuning.json，可在 web 调优页编辑。");
     println!();
     println!("规则格式:");
     println!("  # 注释以 # 或 // 开头");
@@ -85,8 +89,7 @@ fn main() {
     let prog_name = &args[0];
 
     // 参数解析先行，-v/-h/错误用法在设置加载前退出，不产生文件副作用
-    let (mut cli_cfg, mut cli_interval, mut cli_cpuset, mut cli_web) =
-        (None, None, None, false);
+    let (mut cli_cfg, mut cli_interval, mut cli_cpuset, mut cli_web) = (None, None, None, false);
 
     let mut i = 1;
     while i < args.len() {
@@ -159,7 +162,10 @@ fn main() {
     }
 
     // 应用设置持久化于 AppOpt.json，命令行参数优先覆盖
-    let st = settings_load(SETTINGS_FILE);
+    let st = settings_load(&settings_file());
+    // 调优配置独立于旧版 applist.conf；必须在加载应用集合之前完成，
+    // 以便纯内存/线程调优的应用同样进入 eBPF 与 /proc 发现范围。
+    tuning_load_file(&tuning_file());
     let config_file = cli_cfg.unwrap_or(st.config_file);
     let sleep_interval = cli_interval.unwrap_or(st.check_interval);
     let cpuset_name = cli_cpuset.unwrap_or(st.cpuset_name);
@@ -221,8 +227,11 @@ fn main() {
     println!("启动AppOpt服务 v{}", env!("CARGO_PKG_VERSION"));
 
     // 恢复的强制 proc 模式无需 eBPF 初始化
-    let mut ebpf_state: Option<EbpfState> =
-        if MODE_FORCE.load(Ordering::Relaxed) == 2 { None } else { ebpf_init() };
+    let mut ebpf_state: Option<EbpfState> = if MODE_FORCE.load(Ordering::Relaxed) == 2 {
+        None
+    } else {
+        ebpf_init()
+    };
     // 仅自动模式失败一次即放弃；强制 eBPF 需持续重试，强制 proc 无需 eBPF
     if ebpf_state.is_none() && MODE_FORCE.load(Ordering::Relaxed) == 0 {
         EBPF_GAVE_UP.store(true, Ordering::Relaxed);
@@ -333,7 +342,9 @@ fn main() {
                 cache.last_proc_count = 0;
             }
             cache_sync(cache, &cfg);
-            if affinity_deadline.elapsed() >= Duration::from_secs(5 * interval) || cache.force_affinity {
+            if affinity_deadline.elapsed() >= Duration::from_secs(5 * interval)
+                || cache.force_affinity
+            {
                 cache.cache.affinity_sync(&cfg.topo);
                 affinity_deadline = Instant::now();
                 cache.force_affinity = false;

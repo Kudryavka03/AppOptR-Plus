@@ -3,7 +3,10 @@ use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
 
-use crate::config::{close_like, comment_at, parse_outer, split_rule_line, split_single_line, strip_comment, OuterLine};
+use crate::config::{
+    OuterLine, close_like, comment_at, parse_outer, split_rule_line, split_single_line,
+    strip_comment,
+};
 
 pub enum RuleEdit {
     Ok,
@@ -77,12 +80,15 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
             match split_rule_line(p) {
                 Some((name, _, closed)) => {
                     if target_block && !name.is_empty() {
-                        t.threads.entry(name.to_string()).or_default().push(ThreadLoc {
-                            idx: i,
-                            single: false,
-                            closed,
-                            open: false,
-                        });
+                        t.threads
+                            .entry(name.to_string())
+                            .or_default()
+                            .push(ThreadLoc {
+                                idx: i,
+                                single: false,
+                                closed,
+                                open: false,
+                            });
                     }
                     if closed {
                         in_block = false;
@@ -100,15 +106,23 @@ fn target_scan(lines: &[String], pkg: &str) -> Target {
         }
 
         match parse_outer(p) {
-            OuterLine::Single { pkg: pg, thread: th, open, .. } => {
+            OuterLine::Single {
+                pkg: pg,
+                thread: th,
+                open,
+                ..
+            } => {
                 pending = None;
                 if pg == pkg && !th.is_empty() {
-                    t.threads.entry(th.to_string()).or_default().push(ThreadLoc {
-                        idx: i,
-                        single: true,
-                        closed: false,
-                        open,
-                    });
+                    t.threads
+                        .entry(th.to_string())
+                        .or_default()
+                        .push(ThreadLoc {
+                            idx: i,
+                            single: true,
+                            closed: false,
+                            open,
+                        });
                 }
                 if open {
                     in_block = true;
@@ -199,7 +213,8 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
     }
     items.sort_unstable_by_key(|(l, _)| l.idx);
     if t.block_close.is_none()
-        && (items.iter().any(|(l, _)| l.open) || !matches!(t.pkg_line, None | Some(PkgLine::Standalone(_))))
+        && (items.iter().any(|(l, _)| l.open)
+            || !matches!(t.pkg_line, None | Some(PkgLine::Standalone(_))))
     {
         return;
     }
@@ -233,7 +248,11 @@ fn normalize_singles(lines: &mut Vec<String>, pkg: &str) {
 }
 
 fn bare_open_line(pkg: &str) -> String {
-    if pkg.contains('=') { format!("{pkg}= {{") } else { format!("{pkg} {{") }
+    if pkg.contains('=') {
+        format!("{pkg}= {{")
+    } else {
+        format!("{pkg} {{")
+    }
 }
 
 fn with_comment(new_line: &str, old: &str) -> String {
@@ -245,7 +264,9 @@ fn with_comment(new_line: &str, old: &str) -> String {
 
 fn spec_swap(raw: &str, cpus: &str) -> String {
     let cut = comment_at(raw).unwrap_or(raw.len());
-    let Some(eq) = raw[..cut].rfind('=') else { return raw.into() };
+    let Some(eq) = raw[..cut].rfind('=') else {
+        return raw.into();
+    };
     let rhs = &raw[eq + 1..cut];
     let val = rhs.trim_start();
     let lead = rhs.len() - val.len();
@@ -304,7 +325,10 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
             Some(PkgLine::BarePending(i)) => {
                 lines[i] = with_comment(&format!("{}={} {{", pkg, cpus), &lines[i]);
                 if let Some(open) = t.block_open
-                    && matches!(parse_outer(lines[open].trim()), OuterLine::BareOpen { pkg: "" })
+                    && matches!(
+                        parse_outer(lines[open].trim()),
+                        OuterLine::BareOpen { pkg: "" }
+                    )
                 {
                     lines.remove(open);
                 }
@@ -328,7 +352,10 @@ pub fn rule_upsert(path: &str, pkg: &str, thread: &str, cpus: &str) -> RuleEdit 
         lines.insert(close, format!("\t{}={}", thread, cpus));
     } else if let Some(PkgLine::Standalone(i)) = t.pkg_line {
         lines[i] = format!("{} {{", lines[i].trim_end());
-        lines.splice(i + 1..i + 1, [format!("\t{}={}", thread, cpus), "}".to_string()]);
+        lines.splice(
+            i + 1..i + 1,
+            [format!("\t{}={}", thread, cpus), "}".to_string()],
+        );
     } else if t.unterminated {
         return RuleEdit::Malformed;
     } else {
@@ -398,7 +425,14 @@ pub fn rule_delete_pkg(path: &str, pkg: &str) -> RuleEdit {
         if let Some(open) = t.block_open {
             let end = t
                 .block_close
-                .or_else(|| t.threads.values().flatten().filter(|l| !l.single).map(|l| l.idx).max())
+                .or_else(|| {
+                    t.threads
+                        .values()
+                        .flatten()
+                        .filter(|l| !l.single)
+                        .map(|l| l.idx)
+                        .max()
+                })
                 .unwrap_or(open);
             del.extend(open..=end);
         }

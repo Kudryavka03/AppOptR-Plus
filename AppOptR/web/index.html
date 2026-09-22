@@ -75,7 +75,7 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 .seg button{flex:1;padding:7px 0;border-radius:8px;font-size:13px;transition:all .15s}
 .seg button.on{background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12);font-weight:600;color:var(--blue)}
 .field{display:flex;gap:8px;align-items:center}
-.field input,.modal input{background:var(--bg);border:1px solid transparent;border-radius:10px;padding:9px 12px;font-size:14px;outline:none;font-family:inherit;color:var(--fg);transition:border-color .15s,background .15s}
+  .field input,.modal input,.modal select{background:var(--bg);border:1px solid transparent;border-radius:10px;padding:9px 12px;font-size:14px;outline:none;font-family:inherit;color:var(--fg);transition:border-color .15s,background .15s}
 .field input{flex:1;min-width:0}
 .field .btn{flex-shrink:0}
 .hint{font-size:12px;color:var(--sub);margin-top:8px;line-height:1.5;word-break:break-all}
@@ -86,7 +86,7 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 .modal h3{font-size:16px;margin-bottom:14px;text-align:center}
 .modal input{width:100%;margin-bottom:10px}
 .modal input[readonly]{background:var(--card);color:var(--sub)}
-.field input:focus,.modal input:focus{border-color:var(--blue);background:#fff}
+  .field input:focus,.modal input:focus,.modal select:focus{border-color:var(--blue);background:#fff}
 .modal-actions{display:flex;gap:8px;margin-top:6px}
 .modal-actions button{flex:1;padding:9px 0;border-radius:999px;font-size:14px}
 .core-chips{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
@@ -128,7 +128,14 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 .qrs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .qr{display:grid;gap:8px}
 .qr>svg{width:100%;height:auto;display:block;border-radius:8px}
-.qr .btn{width:100%;padding:8px 0}
+  .qr .btn{width:100%;padding:8px 0}
+  .tune-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+  .tune-grid input{margin:0!important;min-width:0}
+  .tune-label{display:block;font-size:12px;color:var(--sub);margin:10px 0 5px}
+  .tune-thread{border-left:2px solid rgba(0,122,255,.25);padding:0 0 2px 10px;margin:12px 0}
+  .tune-thread .tr-head input{margin:0}
+  .check-row{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px}
+  .check-row input{width:auto!important;margin:0!important}
 .btn-wx{background:#07c160}
 #page-donate .logo{background:linear-gradient(135deg,#ff9a9e,#ff5e7e)}
 #page-donate .logo svg{fill:#fff;stroke:none}
@@ -183,6 +190,24 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 <div id="r-list"></div>
 </section>
 
+<section id="tab-tuning" class="panel" hidden>
+<div class="card">
+<div class="bar"><div class="card-title" style="margin:0">内存组</div><button class="btn" id="tg-add">＋ 添加</button></div>
+<div class="hint">先定义已有 memory cgroup 的安全路径，再将应用加入其中。路径可使用 {uid}、{pid}、{pkg} 占位符；不会创建 cgroup，也不会迁移同 UID 的其他应用。</div>
+<div class="hint" id="tg-caps"></div>
+<div id="tg-list"></div>
+</div>
+<div class="card">
+<div class="bar"><div class="card-title" style="margin:0">应用调优</div><button class="btn" id="ta-add">＋ 添加</button></div>
+<div class="hint">线程名支持 glob（例如 Render*）。UCLAMP 范围为 0–1024；nice 范围为 -20–19。保存后对已运行应用立即重新扫描。</div>
+<div id="ta-list"></div>
+</div>
+<div class="card" id="tg-warn-card" hidden>
+<div class="card-title">运行提示</div>
+<div class="hint" id="tg-warnings" style="color:var(--orange)"></div>
+</div>
+</section>
+
 <section id="tab-settings" class="panel" hidden>
 <div class="card">
 <div class="card-title">工作模式</div>
@@ -221,6 +246,7 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 <nav class="tabbar">
 <button class="tab active" data-tab="status"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 0 1 16 0"/><path d="M12 16L16 12"/><circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none"/><path d="M6 20h12"/></svg>状态</button>
 <button class="tab" data-tab="rules"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>规则</button>
+<button class="tab" data-tab="tuning"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-6"/><path d="M3 19h18"/><circle cx="5" cy="7" r="1.5"/><circle cx="12" cy="3" r="1.5"/><circle cx="19" cy="11" r="1.5"/></svg>调优</button>
 <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24"><path d="M5 21V9M12 21V3M19 21v-8"/><circle cx="5" cy="6" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="19" cy="10" r="2"/></svg>设置</button>
 </nav>
 
@@ -237,12 +263,13 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 </div>
 <div class="card">
 <div class="card-title">简介</div>
-<p class="text">AppOpt 是一款 Android 应用 CPU 亲和性管理工具。基于规则配置文件，将指定应用的进程与线程绑定到合适的 CPU 核心（小核省电、大核高性能），配置保存后即时热加载，无需重启应用。</p>
+<p class="text">AppOpt 是一款 Android 应用调度管理工具。除 CPU 亲和性外，还可为特定应用加入已有 memory cgroup、调整该组内存参数，并为特定线程设置 UCLAMP 与 nice。配置保存后即时热加载，无需重启应用。</p>
 </div>
 <div class="card">
 <div class="card-title">使用说明</div>
 <div class="text"><ol>
 <li>规则页点击「添加」，输入应用包名，可同时配置包级默认（可选）与多条线程规则后一次保存</li>
+<li>调优页先创建已有 memory cgroup 的安全路径，再把应用关联到该组；线程规则可设置 UCLAMP min/max 与 nice</li>
 <li>设置页可切换 eBPF / Proc 工作模式、cpuset 目录名、检查间隔与配置文件路径</li>
 <li>配置文件也可直接手工编辑，保存后自动热加载</li>
 <li>更多规则编写说明参考官网文档</li>
@@ -292,6 +319,45 @@ button{cursor:pointer;border:none;font-family:inherit;background:none;color:inhe
 </div>
 </div>
 
+<div id="modal-memory-group" class="modal-bg" hidden>
+<div class="modal">
+<h3 id="mg-title">添加内存组</h3>
+<label class="tune-label">名称</label>
+<input id="mg-name" maxlength="63" placeholder="例如 game">
+<label class="tune-label">现有 cgroup 路径</label>
+<input id="mg-path" maxlength="255" placeholder="例如 mimd/uid_{uid}">
+<div class="hint">可填相对于 /dev/memcg 或 /sys/fs/cgroup 的路径，也可填这两个根目录下的绝对路径。</div>
+<div class="tune-grid">
+<input id="mg-swap" type="number" min="0" max="200" placeholder="Swappiness 0–200">
+<input id="mg-min" placeholder="memory.min，如 256M">
+<input id="mg-low" placeholder="memory.low，如 512M">
+<input id="mg-high" placeholder="memory.high，如 1G">
+<input id="mg-max" placeholder="memory.max，如 2G / max">
+</div>
+<label class="tune-label">memory.oom.group（仅 cgroup v2）</label>
+<select id="mg-oom"><option value="">不设置</option><option value="true">开启</option><option value="false">关闭</option></select>
+<div class="modal-actions">
+<button class="btn-outline" id="mg-cancel">取消</button>
+<button class="btn" id="mg-save">保存</button>
+</div>
+</div>
+</div>
+
+<div id="modal-tuning-app" class="modal-bg" hidden>
+<div class="modal">
+<h3 id="ma-title">添加应用调优</h3>
+<div class="sg-wrap"><input id="ma-pkg" placeholder="输入应用包名"><div class="sg-box" id="sg-ma-pkg" hidden></div></div>
+<label class="tune-label">内存组（可选）</label>
+<select id="ma-group"></select>
+<div id="ma-threads"></div>
+<button class="rule-add" id="ma-addthread">＋ 线程调优规则</button>
+<div class="modal-actions">
+<button class="btn-outline" id="ma-cancel">取消</button>
+<button class="btn" id="ma-save">保存</button>
+</div>
+</div>
+</div>
+
 <div id="modal-confirm" class="modal-bg" hidden>
 <div class="modal">
 <h3 id="mc-title">删除规则</h3>
@@ -324,9 +390,10 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
   if(t===activeTab)return;
   activeTab=t;
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));
-  ['status','rules','settings'].forEach(n=>$('tab-'+n).hidden=n!==t);
+  ['status','rules','tuning','settings'].forEach(n=>$('tab-'+n).hidden=n!==t);
   if(t==='status')startStat();else stopStat();
   if(t==='rules')loadRules();
+  if(t==='tuning')loadTuning();
   if(t==='settings')loadCfg();
 });
 
@@ -602,11 +669,12 @@ function suggest_bind(input, box, opts = {}) {
   };
   const fetch_list = async () => {
     const q = input.value.trim();
-    const pkg = opts.thread ? $('mr-pkg').value.trim() : '';
-    if (!q || (opts.thread && !pkg)) { hide(); return; }
+    const pkgInput = opts.pkgInput || (opts.thread ? 'mr-pkg' : '');
+    const pkg = pkgInput ? $(pkgInput).value.trim() : '';
+    if (!q || (pkgInput && !pkg)) { hide(); return; }
     const cur = ++seq;
     box.dataset.closed = '';
-    const body = opts.thread ? { pkg, q } : { q };
+    const body = pkgInput ? { pkg, q } : { q };
     try {
       const d = await api('/api/suggest', body);
       if (cur !== seq || box.dataset.closed) return;
@@ -639,6 +707,169 @@ document.addEventListener('pointerdown', e => {
   if (!e.target.closest('.sg-wrap'))
     document.querySelectorAll('.sg-box:not([hidden])').forEach(sgClose);
 });
+
+let tuningData={memory_groups:[],apps:[],capabilities:{},warnings:[]};
+let mgEdit=-1,maEdit=-1,maThreads=[];
+const optNum=v=>v===null||v===undefined||v===''?null:Number(v);
+const optStr=v=>String(v??'').trim()||null;
+function memSummary(g){
+  const a=[];
+  if(g.swappiness!==null&&g.swappiness!==undefined)a.push('swap '+g.swappiness);
+  if(g.memory_min)a.push('min '+g.memory_min);
+  if(g.memory_low)a.push('low '+g.memory_low);
+  if(g.memory_high)a.push('high '+g.memory_high);
+  if(g.memory_max)a.push('max '+g.memory_max);
+  return a.join(' · ')||'仅迁移';
+}
+function appSummary(a){
+  const x=[];
+  if(a.memory_group)x.push('内存组 '+a.memory_group);
+  if((a.threads||[]).length)x.push((a.threads||[]).length+' 条线程');
+  return x.join(' · ')||'未设置';
+}
+function renderTuning(){
+  const groups=tuningData.memory_groups||[],apps=tuningData.apps||[];
+  const gbox=$('tg-list'),abox=$('ta-list');
+  gbox.innerHTML=groups.length?groups.map((g,i)=>
+    '<div class="row"><div style="min-width:0"><div class="value" style="text-align:left">'+esc(g.name)+'</div><div class="hint" style="margin:2px 0 0">'+esc(g.path)+'<br>'+esc(memSummary(g))+'</div></div><button class="icon-btn" data-mg-edit="'+i+'" title="编辑内存组">'+ICO_EDIT+'</button><button class="icon-btn danger" data-mg-del="'+i+'" title="删除内存组">'+ICO_TRASH+'</button></div>'
+  ).join(''):'<div class="empty">暂无内存组<br>先添加一个已有的 memory cgroup</div>';
+  abox.innerHTML=apps.length?apps.map((a,i)=>
+    '<div class="row"><div style="min-width:0"><div class="value" style="text-align:left">'+esc(a.pkg)+'</div><div class="hint" style="margin:2px 0 0">'+esc(appSummary(a))+'</div></div><button class="icon-btn" data-ma-edit="'+i+'" title="编辑应用调优">'+ICO_EDIT+'</button><button class="icon-btn danger" data-ma-del="'+i+'" title="删除应用调优">'+ICO_TRASH+'</button></div>'
+  ).join(''):'<div class="empty">暂无应用调优<br>可单独设置内存组或线程 UCLAMP / nice</div>';
+  const c=tuningData.capabilities||{},roots=(c.memory_roots||[]).join('、');
+  $('tg-caps').textContent=roots
+    ?'检测到内存 cgroup：'+roots+'。'+(c.v1_swappiness?'检测到 v1 memory.swappiness；':'未检测到 v1 memory.swappiness（cgroup v2 不提供该参数）；')+(c.uclamp?'支持 sched_setattr UCLAMP。':'当前架构未定义 UCLAMP syscall。')
+    :'未检测到可用 memory cgroup；线程 UCLAMP / nice 仍可使用。';
+  const warnings=tuningData.warnings||[];
+  $('tg-warn-card').hidden=!warnings.length;
+  $('tg-warnings').textContent=warnings.join('\n');
+}
+async function loadTuning(){
+  try{
+    const d=await api('/api/tuning');
+    tuningData={memory_groups:d.memory_groups||[],apps:d.apps||[],capabilities:d.capabilities||{},warnings:d.warnings||[]};
+    renderTuning();
+  }catch(e){toast(e.message)}
+}
+async function saveTuning(){
+  await api('/api/tuning',{memory_groups:tuningData.memory_groups||[],apps:tuningData.apps||[]});
+  toast('调优配置已保存并重新扫描');
+  await loadTuning();
+}
+function openMemoryGroup(i){
+  mgEdit=i;
+  const g=i>=0?tuningData.memory_groups[i]:{};
+  $('mg-title').textContent=i>=0?'编辑内存组':'添加内存组';
+  $('mg-name').value=g.name||'';
+  $('mg-name').readOnly=i>=0;
+  $('mg-path').value=g.path||'';
+  $('mg-swap').value=g.swappiness??'';
+  $('mg-min').value=g.memory_min||'';
+  $('mg-low').value=g.memory_low||'';
+  $('mg-high').value=g.memory_high||'';
+  $('mg-max').value=g.memory_max||'';
+  $('mg-oom').value=g.oom_group===true?'true':g.oom_group===false?'false':'';
+  $('modal-memory-group').hidden=false;
+}
+async function saveMemoryGroup(){
+  const name=$('mg-name').value.trim();
+  const path=$('mg-path').value.trim();
+  if(!name||!path)return toast('请填写内存组名称和 cgroup 路径');
+  const group={
+    name:name,path:path,
+    swappiness:optNum($('mg-swap').value.trim()),
+    memory_min:optStr($('mg-min').value),
+    memory_low:optStr($('mg-low').value),
+    memory_high:optStr($('mg-high').value),
+    memory_max:optStr($('mg-max').value),
+    oom_group:$('mg-oom').value===''?null:$('mg-oom').value==='true'
+  };
+  if(mgEdit>=0)tuningData.memory_groups[mgEdit]=group;
+  else if(tuningData.memory_groups.some(x=>x.name===name))return toast('内存组名称已存在');
+  else tuningData.memory_groups.push(group);
+  try{$('modal-memory-group').hidden=true;await saveTuning()}catch(e){toast(e.message);$('modal-memory-group').hidden=false}
+}
+function memoryGroupOptions(selected){
+  const o=['<option value="">不分配内存组</option>'];
+  (tuningData.memory_groups||[]).forEach(g=>o.push('<option value="'+esc(g.name)+'"'+(g.name===selected?' selected':'')+'>'+esc(g.name)+' · '+esc(g.path)+'</option>'));
+  return o.join('');
+}
+function renderAppThreads(){
+  const box=$('ma-threads');
+  box.innerHTML=maThreads.map((t,i)=>
+    '<div class="tune-thread" data-mti="'+i+'"><div class="tr-head sg-wrap"><input class="ma-pattern" placeholder="线程名或 Render*" value="'+esc(t.pattern||'')+'"><div class="sg-box" hidden></div><button class="icon-btn danger ma-delthread" title="删除线程规则">'+ICO_TRASH+'</button></div><div class="tune-grid"><input class="ma-min" type="number" min="0" max="1024" placeholder="UCLAMP min" value="'+esc(t.uclamp_min??'')+'"><input class="ma-max" type="number" min="0" max="1024" placeholder="UCLAMP max" value="'+esc(t.uclamp_max??'')+'"><input class="ma-nice" type="number" min="-20" max="19" placeholder="nice -20 到 19"></div></div>'
+  ).join('');
+  maThreads.forEach((t,i)=>{
+    const el=box.children[i],nice=el.querySelector('.ma-nice');
+    nice.value=t.nice??'';
+    suggest_bind(el.querySelector('.ma-pattern'),el.querySelector('.sg-box'),{pkgInput:'ma-pkg',onpick:v=>{maThreads[i].pattern=v.trim()}});
+  });
+}
+function openTuningApp(i){
+  maEdit=i;
+  const a=i>=0?tuningData.apps[i]:{};
+  $('ma-title').textContent=i>=0?'编辑应用调优':'添加应用调优';
+  $('ma-pkg').value=a.pkg||'';
+  $('ma-pkg').readOnly=i>=0;
+  $('ma-group').innerHTML=memoryGroupOptions(a.memory_group||'');
+  maThreads=(a.threads||[]).map(t=>({pattern:t.pattern||'',uclamp_min:t.uclamp_min??'',uclamp_max:t.uclamp_max??'',nice:t.nice??''}));
+  renderAppThreads();
+  $('modal-tuning-app').hidden=false;
+}
+async function saveTuningApp(){
+  const pkg=$('ma-pkg').value.trim(),group=$('ma-group').value||null;
+  if(!pkg)return toast('请输入应用包名');
+  const threads=[];
+  for(const t of maThreads){
+    const pattern=String(t.pattern||'').trim(),min=optNum(t.uclamp_min),max=optNum(t.uclamp_max),nice=optNum(t.nice);
+    if(!pattern&&!((min!==null)||(max!==null)||(nice!==null)))continue;
+    if(!pattern)return toast('请为线程规则填写线程名或 glob');
+    threads.push({pattern:pattern,uclamp_min:min,uclamp_max:max,nice:nice});
+  }
+  if(!group&&!threads.length)return toast('请关联内存组或添加线程规则');
+  const app={pkg:pkg,memory_group:group,threads:threads};
+  if(maEdit>=0)tuningData.apps[maEdit]=app;
+  else if(tuningData.apps.some(x=>x.pkg===pkg))return toast('该应用已有调优配置');
+  else tuningData.apps.push(app);
+  try{$('modal-tuning-app').hidden=true;await saveTuning()}catch(e){toast(e.message);$('modal-tuning-app').hidden=false}
+}
+$('tg-add').onclick=()=>openMemoryGroup(-1);
+$('mg-cancel').onclick=()=>$('modal-memory-group').hidden=true;
+$('mg-save').onclick=saveMemoryGroup;
+$('ta-add').onclick=()=>openTuningApp(-1);
+$('ma-cancel').onclick=()=>$('modal-tuning-app').hidden=true;
+$('ma-save').onclick=saveTuningApp;
+$('ma-addthread').onclick=()=>{maThreads.push({pattern:'',uclamp_min:'',uclamp_max:'',nice:''});renderAppThreads()};
+$('tg-list').addEventListener('click',e=>{
+  const edit=e.target.closest('[data-mg-edit]'),del=e.target.closest('[data-mg-del]');
+  if(edit)return openMemoryGroup(+edit.dataset.mgEdit);
+  if(del){
+    const i=+del.dataset.mgDel,g=tuningData.memory_groups[i];
+    if(tuningData.apps.some(a=>a.memory_group===g.name))return toast('该内存组仍被应用引用，不能删除');
+    if(confirm('删除内存组 '+g.name+'？')){tuningData.memory_groups.splice(i,1);saveTuning().catch(x=>toast(x.message))}
+  }
+});
+$('ta-list').addEventListener('click',e=>{
+  const edit=e.target.closest('[data-ma-edit]'),del=e.target.closest('[data-ma-del]');
+  if(edit)return openTuningApp(+edit.dataset.maEdit);
+  if(del){
+    const i=+del.dataset.maDel,a=tuningData.apps[i];
+    if(confirm('删除应用 '+a.pkg+' 的调优配置？')){tuningData.apps.splice(i,1);saveTuning().catch(x=>toast(x.message))}
+  }
+});
+$('ma-threads').addEventListener('input',e=>{
+  const row=e.target.closest('[data-mti]');if(!row)return;
+  const t=maThreads[+row.dataset.mti];
+  if(e.target.classList.contains('ma-pattern'))t.pattern=e.target.value;
+  if(e.target.classList.contains('ma-min'))t.uclamp_min=e.target.value;
+  if(e.target.classList.contains('ma-max'))t.uclamp_max=e.target.value;
+  if(e.target.classList.contains('ma-nice'))t.nice=e.target.value;
+});
+$('ma-threads').addEventListener('click',e=>{
+  const del=e.target.closest('.ma-delthread');if(!del)return;
+  maThreads.splice(+del.closest('[data-mti]').dataset.mti,1);renderAppThreads();
+});
+suggest_bind($('ma-pkg'),$('sg-ma-pkg'),{});
 
 let confirmCb=null;
 function confirmDel(msg,body){
